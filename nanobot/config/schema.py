@@ -174,6 +174,8 @@ class Config(BaseSettings):
             return self.providers.zhipu.api_base
         if "vllm" in model:
             return self.providers.vllm.api_base
+        if any(k in model for k in ("anthropic", "claude")):
+            return self.providers.anthropic.api_base
         return None
     
     class Config:

@@ -31,21 +31,28 @@ class LiteLLMProvider(LLMProvider):
             (api_key and api_key.startswith("sk-or-")) or
             (api_base and "openrouter" in api_base)
         )
-        
-        # Track if using custom endpoint (vLLM, etc.)
-        self.is_vllm = bool(api_base) and not self.is_openrouter
-        
+
+        # Check if using custom Anthropic endpoint
+        self.is_anthropic_custom = bool(api_base) and ("anthropic" in default_model.lower() or "claude" in default_model.lower())
+
+        # Track if using custom endpoint (vLLM, etc.) - exclude anthropic custom
+        self.is_vllm = bool(api_base) and not self.is_openrouter and not self.is_anthropic_custom
+
         # Configure LiteLLM based on provider
         if api_key:
             if self.is_openrouter:
                 # OpenRouter mode - set key
                 os.environ["OPENROUTER_API_KEY"] = api_key
+            elif self.is_anthropic_custom:
+                # Custom Anthropic endpoint
+                os.environ["ANTHROPIC_API_KEY"] = api_key
+                os.environ["ANTHROPIC_API_BASE"] = api_base
             elif self.is_vllm:
                 # vLLM/custom endpoint - uses OpenAI-compatible API
                 os.environ["OPENAI_API_KEY"] = api_key
             elif "deepseek" in default_model:
                 os.environ.setdefault("DEEPSEEK_API_KEY", api_key)
-            elif "anthropic" in default_model:
+            elif "anthropic" in default_model or "claude" in default_model:
                 os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
             elif "openai" in default_model or "gpt" in default_model:
                 os.environ.setdefault("OPENAI_API_KEY", api_key)
@@ -87,34 +94,40 @@ class LiteLLMProvider(LLMProvider):
             LLMResponse with content and/or tool calls.
         """
         model = model or self.default_model
-        
-        # For OpenRouter, prefix model name if not already prefixed
-        if self.is_openrouter and not model.startswith("openrouter/"):
-            model = f"openrouter/{model}"
-        
-        # For Zhipu/Z.ai, ensure prefix is present
-        # Handle cases like "glm-4.7-flash" -> "zai/glm-4.7-flash"
-        if ("glm" in model.lower() or "zhipu" in model.lower()) and not (
-            model.startswith("zhipu/") or 
-            model.startswith("zai/") or 
-            model.startswith("openrouter/")
-        ):
-            model = f"zai/{model}"
 
-        # For Moonshot/Kimi, ensure moonshot/ prefix (before vLLM check)
-        if ("moonshot" in model.lower() or "kimi" in model.lower()) and not (
-            model.startswith("moonshot/") or model.startswith("openrouter/")
-        ):
-            model = f"moonshot/{model}"
+        # For custom Anthropic endpoint, ensure anthropic/ prefix is present
+        # This tells LiteLLM to use the anthropic provider with custom base URL
+        if self.is_anthropic_custom:
+            if not model.startswith("anthropic/"):
+                model = f"anthropic/{model}"
+        else:
+            # For OpenRouter, prefix model name if not already prefixed
+            if self.is_openrouter and not model.startswith("openrouter/"):
+                model = f"openrouter/{model}"
 
-        # For Gemini, ensure gemini/ prefix if not already present
-        if "gemini" in model.lower() and not model.startswith("gemini/"):
-            model = f"gemini/{model}"
+            # For Zhipu/Z.ai, ensure prefix is present
+            # Handle cases like "glm-4.7-flash" -> "zai/glm-4.7-flash"
+            if ("glm" in model.lower() or "zhipu" in model.lower()) and not (
+                model.startswith("zhipu/") or
+                model.startswith("zai/") or
+                model.startswith("openrouter/")
+            ):
+                model = f"zai/{model}"
 
-        # For vLLM, use hosted_vllm/ prefix per LiteLLM docs
-        # Convert openai/ prefix to hosted_vllm/ if user specified it
-        if self.is_vllm:
-            model = f"hosted_vllm/{model}"
+            # For Moonshot/Kimi, ensure moonshot/ prefix (before vLLM check)
+            if ("moonshot" in model.lower() or "kimi" in model.lower()) and not (
+                model.startswith("moonshot/") or model.startswith("openrouter/")
+            ):
+                model = f"moonshot/{model}"
+
+            # For Gemini, ensure gemini/ prefix if not already present
+            if "gemini" in model.lower() and not model.startswith("gemini/"):
+                model = f"gemini/{model}"
+
+            # For vLLM, use hosted_vllm/ prefix per LiteLLM docs
+            # Convert openai/ prefix to hosted_vllm/ if user specified it
+            if self.is_vllm:
+                model = f"hosted_vllm/{model}"
         
         # kimi-k2.5 only supports temperature=1.0
         if "kimi-k2.5" in model.lower():
@@ -126,9 +139,10 @@ class LiteLLMProvider(LLMProvider):
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        
+
         # Pass api_base directly for custom endpoints (vLLM, etc.)
-        if self.api_base:
+        # But not for anthropic custom - it uses ANTHROPIC_API_BASE env var
+        if self.api_base and not self.is_anthropic_custom:
             kwargs["api_base"] = self.api_base
         
         if tools:
